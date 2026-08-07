@@ -36,6 +36,8 @@ library(geobr)
 
 ## Carregando pacote
 library(readr)
+
+purrr::map(list.files("functions/",full.names = T), source)
 ```
 
 ## Leitura de dados
@@ -98,7 +100,7 @@ Usando o geobr
 1 - Carregando os shapes
 
 ``` r
-estados_geobr <- read_state(showProgress = FALSE)
+estados_geobr <- read_state(year = 2024,showProgress = FALSE)
 ```
 
 2 - Filtrando para o estado de SP
@@ -168,7 +170,7 @@ glimpse(xco2)
 
 dados |> 
   sample_n(10000) |>
-  ggplot(aes(x=year, y=xco2)) +
+  ggplot(aes(x=date, y=xco2)) +
   geom_point() +
   geom_point(shape=21,color="black",fill="gray") +
   geom_smooth(method = "lm") +
@@ -182,11 +184,11 @@ dados |>
 ``` r
 # Criar year_adj (1, 2, 3...)
 dados_tend <- dados |>
-  mutate(year_adj = year - min(year, na.rm = TRUE))
+  mutate(date_adj = date - min(date, na.rm = TRUE))
 
 # Modelo XCO2
 mod_trend_xco2 <- lm(
-  xco2 ~ year_adj,
+  xco2 ~ date_adj,
   data = dados_tend |> drop_na(xco2)
 )
 
@@ -216,7 +218,7 @@ dados_tend <- dados_tend |>
   select(-(delta_co2))
 
 dados_tend |> 
-  ggplot(aes(x = year, y = xco2)) +
+  ggplot(aes(x = date, y = xco2)) +
   geom_point() +
   geom_point(shape=21,color="black",fill="gray") +
   geom_smooth(method = "lm") +
@@ -376,3 +378,335 @@ boxplot(xco2 ~ month,
 ```
 
 ![](README_files/figure-gfm/unnamed-chunk-15-9.png)<!-- -->
+
+## agregação em grid regular
+
+``` r
+# Expand grid for brazil
+
+#
+dist <- 0.5
+grid_br <- expand.grid(lon=seq(-74,
+                               -27,dist),
+                       lat=seq(-34,
+                               6,
+                               dist))
+
+
+
+pol_sp<- sp_geobr$geometry |> purrr::pluck(1) |> as.matrix()
+
+
+
+grid_br_cut <- grid_br |>
+  dplyr::mutate(
+    flag_sp = def_pol(lon,lat,pol_sp)
+  ) |>
+  tidyr::pivot_longer(
+    tidyr::starts_with('flag'),
+    names_to = 'region',
+    values_to = 'flag'
+  ) |>
+  dplyr::filter(flag) |>
+  dplyr::select(lon,lat) |>
+  dplyr::group_by(lon,lat) |>
+  dplyr::summarise(
+    n_obs = dplyr::n()
+  )
+
+plot(grid_br_cut$lon,grid_br_cut$lat)
+```
+
+![](README_files/figure-gfm/unnamed-chunk-16-1.png)<!-- -->
+
+``` r
+
+
+#### aggregation
+
+df <- dados |> dplyr::mutate(
+  year =lubridate::year(date),
+  month = lubridate::month(date)
+)
+
+
+
+
+for(i in 2019:2024){
+  aux_xco2 <- df |>
+    dplyr::filter(year==i)
+  vct_xco2 <- vector();dist_xco2 <- vector();
+  lon_grid <- vector();lat_grid <- vector();
+  for(k in 1:nrow(aux_xco2)){
+    d <- sqrt((aux_xco2$longitude[k]-grid_br_cut$lon)^2+
+                (aux_xco2$latitude[k]-grid_br_cut$lat)^2
+    )
+    min_index <- order(d)[1]
+    vct_xco2[k] <- aux_xco2$xco2[min_index]
+    dist_xco2[k] <- d[order(d)[1]]
+    lon_grid[k] <- grid_br_cut$lon[min_index]
+    lat_grid[k] <- grid_br_cut$lat[min_index]
+  }
+  aux_xco2$dist_xco2 <- dist_xco2
+  aux_xco2$xco2_new <- vct_xco2
+  aux_xco2$lon_grid <- lon_grid
+  aux_xco2$lat_grid <- lat_grid
+  if(i == 2019){
+    df_new <- aux_xco2
+  }else{
+    df_new <- rbind(df_new,aux_xco2)
+  }
+}
+
+
+df_new|>
+  dplyr::mutate(
+    dist_conf = sqrt((longitude - lon_grid)^2 + (latitude - lat_grid)^2)
+  ) |>
+  dplyr::glimpse()
+#> Rows: 72,598
+#> Columns: 19
+#> $ longitude         <dbl> -52.91444, -52.92016, -52.92609, -52.91319, -52.9300…
+#> $ latitude          <dbl> -22.49881, -22.50841, -22.51799, -22.47058, -22.4993…
+#> $ time              <dbl> 1546362799, 1546362799, 1546362799, 1546362799, 1546…
+#> $ date              <date> 2019-01-01, 2019-01-01, 2019-01-01, 2019-01-01, 201…
+#> $ year              <dbl> 2019, 2019, 2019, 2019, 2019, 2019, 2019, 2019, 2019…
+#> $ month             <dbl> 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1…
+#> $ day               <int> 1, 1, 1, 1, 1, 1, 1, 1, 3, 10, 10, 10, 10, 10, 10, 1…
+#> $ xco2              <dbl> 406.2080, 407.9608, 403.2545, 404.7390, 406.6734, 40…
+#> $ xco2_quality_flag <int> 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1…
+#> $ xco2_incerteza    <dbl> 0.6812540, 0.4800707, 0.5756908, 0.3722289, 0.421822…
+#> $ path              <chr> "oco2_LtCO2_190101_B11100Ar_230602204610s.nc4", "oco…
+#> $ flag_br           <lgl> TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE…
+#> $ flag_nordeste     <lgl> FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FAL…
+#> $ flag_sp           <lgl> TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE…
+#> $ dist_xco2         <dbl> 0.08557188, 0.08027907, 0.07606726, 0.09165560, 0.06…
+#> $ xco2_new          <dbl> 406.2080, 406.2080, 406.2080, 406.2080, 406.2080, 40…
+#> $ lon_grid          <dbl> -53.0, -53.0, -53.0, -53.0, -53.0, -53.0, -53.0, -53…
+#> $ lat_grid          <dbl> -22.5, -22.5, -22.5, -22.5, -22.5, -22.5, -22.5, -22…
+#> $ dist_conf         <dbl> 0.08557188, 0.08027907, 0.07606726, 0.09165560, 0.06…
+
+nrow(df_new |>
+       dplyr::mutate(
+         dist_conf = sqrt((longitude - lon_grid)^2 + (latitude - lat_grid)^2),
+         dist_bol = dist_xco2 - dist_conf
+       ) |>
+       dplyr::filter(dist_bol ==0)) == nrow(df_new)
+#> [1] TRUE
+
+### Saving aggregated data
+# readr::write_rds(xco2_full_trend_cut,'data/xco2_0.5deg_full_trend.rds')
+```
+
+### Analise Beta
+
+``` r
+xco2df_filter <- df_new |>
+  dplyr::filter(dist_xco2<0.25) |>
+  dplyr::mutate(
+    lon = lon_grid,
+    lat = lat_grid,
+  ) |>
+  dplyr::select(-c(lon_grid,lat_grid)) |>
+  dplyr::group_by(lon,lat,year,month) |> ## data month and grid cell aggregation
+  dplyr::summarise(
+    xco2_mean= mean(xco2,na.rm=TRUE),
+    xco2_sd = sd(xco2,na.rm=TRUE),
+    nobs = dplyr::n(),
+    xco2_ep = xco2_sd/sqrt(nobs),
+    cv = 100*xco2_sd/xco2_mean
+  ) |>
+  dplyr::mutate(
+    date = lubridate::make_date(year,month,'15')
+  )
+
+### general model for the year
+
+mod <- lm(xco2_mean~x,data =xco2df_filter |>
+            dplyr::mutate(
+              x = 1:dplyr::n()
+            ))
+
+print("----------------------------")
+#> [1] "----------------------------"
+print("XCO2 before regionalization")
+#> [1] "XCO2 before regionalization"
+
+plot_1 <- xco2df_filter |>
+  dplyr::group_by(date) |>
+  dplyr::summarise(xco2_mean=mean(xco2_mean)) |>
+  ggplot2::ggplot(ggplot2::aes(x=date,y=xco2_mean )) +
+  ggplot2::geom_point(shape=21,color="black",fill="gray") +
+  ggplot2::geom_line(color="red") +
+  ggplot2::geom_smooth(method = "lm") +
+  ggpubr::stat_regline_equation(ggplot2::aes(
+    label =  paste(..eq.label.., ..rr.label.., sep = "*plain(\",\")~~"))) +
+  ggplot2::theme_bw()+
+  ggplot2::xlab('Date')+
+  ggplot2::ylab(expression(
+    'Xco'[2]~' (ppm)'
+  ))
+print(plot_1)
+```
+
+![](README_files/figure-gfm/unnamed-chunk-17-1.png)<!-- -->
+
+``` r
+
+#### regionalization of XCO2 
+print("----------------------------")
+#> [1] "----------------------------"
+print("XCO2 after regionalization")
+#> [1] "XCO2 after regionalization"
+
+plot_2 <- xco2df_filter |>
+  dplyr::mutate(
+    x=1:dplyr::n(),
+    xco2_est = mod$coefficients[1] + mod$coefficients[2]*x,
+    delta=xco2_est - xco2_mean,
+    xco2r = (mod$coefficients[1]-delta)-(mean(xco2_mean)-mod$coefficients[1])
+  ) |>
+  dplyr::group_by(date) |>
+  dplyr::summarise(xco2_mean=mean(xco2r)) |>
+  ggplot2::ggplot(ggplot2::aes(x=date,y=xco2_mean )) +
+  ggplot2::geom_point(shape=21,color="black",fill="gray") +
+  ggplot2::geom_line(color="red") +
+  ggplot2::geom_smooth(method = "lm") +
+  ggpubr::stat_regline_equation(ggplot2::aes(
+    label =  paste(..eq.label.., ..rr.label.., sep = "*plain(\",\")~~"))) +
+  ggplot2::theme_bw()+
+  ggplot2::xlab('Date')+
+  ggplot2::ylab(expression(
+    'Xco'[2][R]~' (ppm)'
+  ))
+print(plot_2)
+```
+
+![](README_files/figure-gfm/unnamed-chunk-17-2.png)<!-- -->
+
+``` r
+
+
+### XCO2 regionalized
+xco2detrend <- xco2df_filter |>
+  dplyr::mutate(
+    x=1:dplyr::n(),
+    xco2_est = mod$coefficients[1] + mod$coefficients[2]*x,
+    delta=xco2_est - xco2_mean,
+    xco2r = (mod$coefficients[1]-delta)-(mean(xco2_mean)-mod$coefficients[1])
+  )
+xco2_aux_detrend <- xco2detrend |>
+  dplyr::ungroup() |>
+  dplyr::group_by(date) |>
+  dplyr::summarise(
+    xco2 = mean(xco2r)
+  )
+
+## general linear model
+mod_detrend <- lm(xco2 ~date,
+                  data = xco2_aux_detrend )
+beta_r <-mod_detrend$coefficients[2] # regional beta
+ep <- summary(mod_detrend)$coefficients[2,2] # regional standard error
+
+ilbr <- beta_r-ep
+slbr <- beta_r+ep
+
+
+### creating a nest object by grid cell
+xco2_nest <- xco2detrend |>
+  tibble::as_tibble() |>
+  dplyr::mutate(year =lubridate::year(date),
+                quarter = lubridate::quarter(date),
+                quarter_year = lubridate::make_date(year, quarter, 1)) |>
+  dplyr::group_by(lon, lat,date) |>
+  dplyr::summarise(xco2 = mean(xco2r, na.rm=TRUE)) |>
+  dplyr::mutate(
+    id_time = date
+  ) |>
+  dplyr::group_by(lon,lat) |>
+  tidyr::nest()
+
+### linear regression for each grid cell
+
+xco2_nest_detrend <- xco2_nest|>
+  dplyr::mutate(
+    beta_line = purrr::map(data,linear_reg, output="beta1"),
+    #p_value = purrr::map(data,linear_reg, output="p_value"),
+    n_obs = purrr::map(data,linear_reg, output="n"),
+    beta_error=purrr::map(data,linear_reg,output='betaerror'),
+    model_error=purrr::map(data,linear_reg,output='modelerror')
+  )
+
+### creating a table
+
+xco2_aux_detrend_new <- xco2_nest_detrend |>
+  dplyr::filter(n_obs > 4) |> ## criteria of minimum observation month for grid cell
+  tidyr::unnest(cols = c(beta_line,beta_error,model_error)) |>
+  dplyr::ungroup() |>
+  dplyr::select(lon, lat, beta_line,beta_error,model_error)
+
+q3_xco2 <- xco2_aux_detrend_new |> dplyr::pull(beta_line) |> quantile(.75)
+q1_xco2 <- xco2_aux_detrend_new |> dplyr::pull(beta_line) |> quantile(.25)
+
+
+plot3 <- xco2_aux_detrend_new |>
+  ggplot2::ggplot(ggplot2::aes(x=beta_line)) +
+  ggplot2::geom_histogram(bins=30,
+                          fill="orange",
+                          color="black") +
+  ggplot2::labs(x="βpixel",y="Count") +
+  ggplot2::geom_vline(xintercept = q1_xco2,
+                      color = "red",
+                      lty=2) +
+  ggplot2::geom_vline(xintercept = q3_xco2,
+                      color = "red",
+                      lty=2)+
+  gghighlight::gghighlight(beta_line < q1_xco2 | beta_line>q3_xco2,
+                           unhighlighted_params = list(
+                             color = "darkgray",
+                             fill = "lightgray")) +
+  ggplot2::theme_minimal()
+print("----------------------------")
+#> [1] "----------------------------"
+print("significant βpixel histogram")
+#> [1] "significant βpixel histogram"
+print(plot3)
+```
+
+![](README_files/figure-gfm/unnamed-chunk-17-3.png)<!-- -->
+
+``` r
+
+plot4 <- sp_geobr |>
+  ggplot2::ggplot()+
+  #ggspatial::annotation_map_tile(type = 'cartolight')+
+  ggplot2::geom_sf(col='grey',fill='white')+
+  #ggplot2::geom_sf(data=br,col='red',fill='NA')+
+  # ggplot2::ylim(-35,5.5)+
+  # ggplot2::xlim(-75,-35)+
+  ggplot2::geom_tile(data=xco2_aux_detrend_new |>
+                       dplyr::mutate(
+                         xco2 = dplyr::case_when(
+                           beta_line > q3_xco2 ~ 'Source',
+                           beta_line < q1_xco2 ~'Sink',
+                           .default = 'Non Significant'
+                         )
+                       ) |>
+                       dplyr::filter(xco2!='Non Significant'),
+                     ggplot2::aes(x=lon,y=lat,color=beta_line,fill=beta_line),
+  )+
+  map_theme()+
+  ggplot2::scale_fill_viridis_c(option='inferno')+
+  ggplot2::scale_color_viridis_c(option='inferno')+
+  #ggplot2::scale_color_manual(values = c('darkgreen','darkred'))+
+  #ggplot2::scale_fill_manual(values = c('darkgreen','darkred'))+
+  ggplot2::labs(x='Longitude',y='Latitude',
+                col=expression(beta~'Xco'[2]),fill=expression(beta~'Xco'[2]))
+print("----------------------------")
+#> [1] "----------------------------"
+print("significant source and sink")
+#> [1] "significant source and sink"
+print(plot4)
+```
+
+![](README_files/figure-gfm/unnamed-chunk-17-4.png)<!-- -->
