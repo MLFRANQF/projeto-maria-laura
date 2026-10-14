@@ -379,6 +379,7 @@ boxplot(xco2 ~ month,
 
 ![](README_files/figure-gfm/unnamed-chunk-15-9.png)<!-- -->
 
+<<<<<<< HEAD
 ## agregação em grid regular
 
 ``` r
@@ -710,3 +711,549 @@ print(plot4)
 ```
 
 ![](README_files/figure-gfm/unnamed-chunk-17-4.png)<!-- -->
+=======
+``` r
+dados_nested <- dados |> 
+  # 1. Agrupando pelas suas colunas reais de tempo e coordenadas
+  group_by(year, month, longitude, latitude) |> 
+  summarise(
+    media_xco2 = mean(xco2, na.rm = TRUE),
+    media_incerteza = mean(xco2_incerteza, na.rm = TRUE), 
+    .groups = "drop"
+  ) |> 
+  # 2. Agrupando por ponto geográfico para criar a lista aninhada (série temporal por pixel)
+  group_by(longitude, latitude) |> 
+  nest() |> 
+  ungroup()
+
+# Verificando a estrutura do objeto aninhado resultante
+glimpse(dados_nested)
+#> Rows: 72,598
+#> Columns: 3
+#> $ longitude <dbl> -52.95830, -52.95214, -52.94812, -52.93008, -52.92609, -52.9…
+#> $ latitude  <dbl> -22.51841, -22.50900, -22.52768, -22.49932, -22.51799, -22.5…
+#> $ data      <list> [<tbl_df[1 x 4]>], [<tbl_df[1 x 4]>], [<tbl_df[1 x 4]>], [<…
+```
+
+``` r
+get_my_par <- function(df, par_return = "beta"){
+  
+  # Garante que o dataframe interno está ordenado cronologicamente
+  df <- df %>% arrange(year, month)
+  
+  # Cria a variável de tempo real baseada em anos decimais (ex: 2019.08 para jan, 2019.16 para fev...)
+  # Isso substitui o 'x <- seq(...)' genérico de forma robusta e precisa
+  x <- df$year + (df$month - 1) / 12
+  y <- df$media_xco2
+  
+  # Ajusta o modelo linear simples
+  mod <- lm(y ~ x)
+  beta <- mod$coefficients[[2]]
+  
+  # Retorna o coeficiente angular (tendência temporal do pixel)
+  if(par_return == "beta") return(beta)
+  
+  # Verificação de segurança para o cálculo da anomalia
+  if(par_return == "anomaly") {
+    if("media_xco2_anomaly" %in% names(df)) {
+      yanom <- df$media_xco2_anomaly
+      anomaly <- mean(yanom, na.rm = TRUE)
+      return(anomaly)
+    } else {
+      # Retorna NA se a coluna de anomalia ainda não tiver sido criada
+      return(NA_real_)
+    }
+  }
+}
+```
+
+``` r
+get_my_par <- function(df, par_return = "beta"){
+  # Ordena cronologicamente
+  df <- df %>% arrange(year, month)
+  
+  # Variável temporal em anos decimais
+  x <- df$year + (df$month - 1) / 12
+  y <- df$media_xco2
+  
+  # Ajusta o modelo linear
+  mod <- lm(y ~ x)
+  
+  # Extrai estritamente o valor numérico da inclinação (segundo elemento)
+  beta <- as.numeric(mod$coefficients[2])
+  
+  if(par_return == "beta") return(beta)
+  
+  if(par_return == "anomaly") {
+    if("media_xco2_anomaly" %in% names(df)) {
+      return(mean(df$media_xco2_anomaly, na.rm = TRUE))
+    } else {
+      return(NA_real_)
+    }
+  }
+}
+```
+
+``` r
+# 1. Carregar as bibliotecas necessárias
+library(sf)
+library(dplyr)
+library(tidyr)
+library(geobr)
+
+# 2. Carregar a base de dados do arquivo RDS e criar o objeto dados_beta_anom
+dados_brutos <- readRDS("data/nasa-xco2-sp.rds")
+
+# Criando as variáveis de beta e anomalia no objeto (ajuste a coluna de XCO2 se tiver outro nome)
+dados_beta_anom <- dados_brutos %>% 
+  mutate(
+    beta_xco2 = xco2,                                # Se beta_xco2 for o próprio XCO2
+    anomaly_xco2 = xco2 - mean(xco2, na.rm = TRUE)   # Cálculo da anomalia em relação à média
+  )
+
+# 3. Carregar a malha de municípios de SP (ano 2020)
+municipios_sp <- geobr::read_municipality(code_muni = "SP", year = 2020, showProgress = FALSE)
+
+# 4. Converter os pontos de latitude/longitude em um objeto espacial (sf)
+dados_pontos_sf <- dados_beta_anom |> 
+  drop_na(longitude, latitude) |> 
+  st_as_sf(coords = c("longitude", "latitude"), crs = st_crs(municipios_sp))
+
+# 5. Cruzamento espacial (identificar município de cada ponto)
+pontos_com_municipio <- st_join(dados_pontos_sf, municipios_sp, join = st_within)
+
+# 6. Agrupar os valores médios por município e unir à malha espacial
+city_kgr_beta_anom <- municipios_sp |> 
+  left_join(
+    pontos_com_municipio |> 
+      st_drop_geometry() |>   # Substitui as_tibble() para remover a geometria com segurança
+      group_by(code_muni) |> 
+      summarise(
+        beta_xco2 = mean(beta_xco2, na.rm = TRUE),
+        anom_xco2 = mean(anomaly_xco2, na.rm = TRUE),
+        .groups = "drop"
+      ),
+    by = "code_muni"
+  )
+
+# 7. Checar a estrutura do objeto final gerado
+glimpse(city_kgr_beta_anom)
+#> Rows: 645
+#> Columns: 10
+#> $ code_muni    <dbl> 3500105, 3500204, 3500303, 3500402, 3500501, 3500550, 350…
+#> $ name_muni    <chr> "Adamantina", "Adolfo", "Aguaí", "Águas Da Prata", "Águas…
+#> $ code_state   <dbl> 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 3…
+#> $ abbrev_state <chr> "SP", "SP", "SP", "SP", "SP", "SP", "SP", "SP", "SP", "SP…
+#> $ name_state   <chr> "São Paulo", "São Paulo", "São Paulo", "São Paulo", "São …
+#> $ code_region  <dbl> 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, …
+#> $ name_region  <chr> "Sudeste", "Sudeste", "Sudeste", "Sudeste", "Sudeste", "S…
+#> $ beta_xco2    <dbl> 406.6762, 407.9403, 408.6506, 407.0110, 413.7576, 406.223…
+#> $ anom_xco2    <dbl> -0.84532248, 0.41884666, 1.12909315, -0.51045303, 6.23611…
+#> $ geom         <MULTIPOLYGON [°]> MULTIPOLYGON (((-51.05425 -..., MULTIPOLYGON…
+```
+
+``` r
+# 1. Cria a variável de tempo e ordena os dados brutos do projeto
+dados_processar <- dados %>% 
+  mutate(tempo_decimal = year + (month - 1) / 12) %>% 
+  arrange(longitude, latitude, tempo_decimal)
+
+# 2. Calcula o Beta usando a fórmula analítica rápida da inclinação
+# Isso garante que cada par de coordenadas receba apenas um único número
+dados_beta_anom <- dados_processar %>% 
+  group_by(longitude, latitude) %>% 
+  summarise(
+    beta_xco2 = cov(xco2, tempo_decimal, use = "complete.obs") / var(tempo_decimal, na.rm = TRUE),
+    anomaly_xco2 = mean(xco2, na.rm = TRUE), # Usando a média como controle enquanto não há anomalia calculada
+    .groups = "drop"
+  ) %>% 
+  drop_na(beta_xco2) # Remove qualquer ponto inválido
+
+# 3. VERIFICAÇÃO CRUCIAL: Verifique se a tabela agora possui dados e números válidos
+print("Número de linhas calculadas:")
+#> [1] "Número de linhas calculadas:"
+nrow(dados_beta_anom)
+#> [1] 0
+
+print("Resumo estatístico dos valores de Beta encontrados:")
+#> [1] "Resumo estatístico dos valores de Beta encontrados:"
+summary(dados_beta_anom$beta_xco2)
+#>    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#> 
+```
+
+``` r
+library(sf)
+library(geobr)
+library(tidyverse)
+library(ggspatial)
+
+# 1. Carregar as bordas oficiais do estado de SP
+sp_borda <- geobr::read_state(code_state = "SP", year = 2020, showProgress = FALSE)
+
+# 2. Criar a grade espacial (lon_grid, lat_grid) e o tempo decimal
+dados_processar <- dados %>% 
+  drop_na(longitude, latitude) %>% 
+  mutate(
+    tempo_decimal = year + (month - 1) / 12,
+    lon_grid = round(longitude, 1),
+    lat_grid = round(latitude, 1)
+  )
+
+# 3. Calcular a tendência temporal (Beta) por célula da grade no período filtrado
+dados_beta_anom <- dados_processar %>% 
+  group_by(lon_grid, lat_grid) %>% 
+  filter(n() > 2) %>% 
+  summarise(
+    beta_xco2 = cov(xco2, tempo_decimal, use = "complete.obs") / var(tempo_decimal, na.rm = TRUE),
+    .groups = "drop"
+  ) %>% 
+  drop_na(beta_xco2)
+
+# 4. Configurar dinamicamente o centro e os limites com os percentis do período
+q_min  <- quantile(dados_beta_anom$beta_xco2, 0.05, na.rm = TRUE)
+q_med  <- quantile(dados_beta_anom$beta_xco2, 0.50, na.rm = TRUE)
+q_max  <- quantile(dados_beta_anom$beta_xco2, 0.95, na.rm = TRUE)
+
+# 5. Gerar o gráfico com a escala customizada (Azul -> Roxo -> Vermelho)
+ggplot() +
+  # Camada de fundo: Estado de SP
+  geom_sf(data = sp_borda, fill = "#f5f5f5", color = "gray70", lwd = 0.4) +
+  
+  # Camada de dados: Grade contínua (Tiles)
+  geom_tile(data = dados_beta_anom, 
+            aes(x = lon_grid, y = lat_grid, fill = beta_xco2), 
+            alpha = 0.85) +
+  
+  # Escala customizada com tons roxos na junção central
+  scale_fill_gradientn(
+    colors = c("#0044ff", "#6a0dad", "#9b30ff", "#d02090", "#ff1100"), 
+    values = scales::rescale(c(q_min, (q_min + q_med)/2, q_med, (q_med + q_max)/2, q_max)),
+    limits = c(q_min, q_max),
+    oob = scales::squish, 
+    name = expression(beta)
+  ) +
+  
+  # Alinhamento espacial do ggplot
+  coord_sf() +
+  theme_bw() +
+  theme(
+    axis.text.x   = element_text(size = rel(0.9), color = "black"),
+    axis.title.x  = element_text(size = rel(1.1), color = "black"),
+    axis.text.y   = element_text(size = rel(0.9), color = "black"),
+    axis.title.y  = element_text(size = rel(1.1), color = "black"),
+    legend.text   = element_text(size = rel(1), color = "black"),
+    legend.title  = element_text(face = 'bold', size = rel(1.2)),
+    plot.title    = element_text(face = 'bold', size = rel(1.2))
+  ) +
+  labs(
+    x = 'Longitude',
+    y = 'Latitude',
+    title = "",
+    subtitle = ""
+  ) +
+  
+  # Rosa dos Ventos
+  annotation_north_arrow(
+    location = "tl", 
+    which_north = "true",
+    pad_x = unit(0.2, "in"),
+    pad_y = unit(0.2, "in"),
+    style = north_arrow_fancy_orienteering(
+      fill = c("white", "black"),
+      line_col = "grey20"
+    )
+  ) +
+  
+  # Barra de Escala
+  annotation_scale(
+    location = "bl",
+    width_hint = 0.2
+  )
+```
+
+![](README_files/figure-gfm/unnamed-chunk-21-1.png)<!-- -->
+
+## Estatísticas descritivas do beta
+
+``` r
+stats_beta <- dados_beta_anom %>% 
+  summarise(
+    Media = mean(beta_xco2, na.rm = TRUE),
+    Mediana = median(beta_xco2, na.rm = TRUE),
+    Desvio_Padrao = sd(beta_xco2, na.rm = TRUE),
+    Minimo = min(beta_xco2, na.rm = TRUE),
+    Q1 = quantile(beta_xco2, 0.25, na.rm = TRUE),
+    Q3 = quantile(beta_xco2, 0.75, na.rm = TRUE),
+    Maximo = max(beta_xco2, na.rm = TRUE)
+  )
+
+print(stats_beta)
+#> # A tibble: 1 × 7
+#>   Media Mediana Desvio_Padrao Minimo    Q1    Q3 Maximo
+#>   <dbl>   <dbl>         <dbl>  <dbl> <dbl> <dbl>  <dbl>
+#> 1  2.60    2.33          7.71  -64.3  1.97  2.77   201.
+```
+
+## Estratificação em Categorias (Classes de Beta)
+
+``` r
+library(sf)
+library(geobr)
+library(tidyverse)
+library(ggspatial)
+
+# 1. Carregar as bordas oficiais do estado de SP
+sp_borda <- geobr::read_state(code_state = "SP", year = 2020, showProgress = FALSE)
+
+# 2. Criar a grade e calcular o Beta
+dados_processar <- dados %>% 
+  drop_na(longitude, latitude) %>% 
+  mutate(
+    tempo_decimal = year + (month - 1) / 12,
+    lon_grid = round(longitude, 1),
+    lat_grid = round(latitude, 1)
+  )
+
+dados_beta_anom <- dados_processar %>% 
+  group_by(lon_grid, lat_grid) %>% 
+  filter(n() > 2) %>% 
+  summarise(
+    beta_xco2 = cov(xco2, tempo_decimal, use = "complete.obs") / var(tempo_decimal, na.rm = TRUE),
+    .groups = "drop"
+  ) %>% 
+  drop_na(beta_xco2)
+
+# 3. Estratificar em 4 categorias baseadas em quartis/percentis
+dados_beta_anom <- dados_beta_anom %>% 
+  mutate(
+    beta_categoria = cut(
+      beta_xco2,
+      breaks = quantile(beta_xco2, probs = c(0, 0.25, 0.50, 0.75, 1), na.rm = TRUE),
+      labels = c("Baixo (Sumidouro / Estável)", "Médio-Baixo", "Médio-Alto", "Alto (Fonte Crítica)"),
+      include.lowest = TRUE
+    )
+  )
+```
+
+## Mapa Categorizado com Foco nas Regiões Críticas
+
+``` r
+# 4. Gerar o gráfico espacial categorizado
+ggplot() +
+  # Camada de fundo: Estado de SP
+  geom_sf(data = sp_borda, fill = "#f8f9fa", color = "gray60", lwd = 0.5) +
+  
+  # Camada de dados categorizada por Tiles
+  geom_tile(data = dados_beta_anom, 
+            aes(x = lon_grid, y = lat_grid, fill = beta_categoria), 
+            alpha = 0.9) +
+  
+  # Escala de cores discretas (Estratificada)
+  scale_fill_manual(
+    values = c(
+      "Baixo (Sumidouro / Estável)" = "#2c7bb6",  # Azul
+      "Médio-Baixo"                 = "#abd9e9",  # Azul claro
+      "Médio-Alto"                  = "#fdae61",  # Laranja
+      "Alto (Fonte Crítica)"        = "#d7191c"   # Vermelho
+    ),
+    name = expression(bold("Classes de " * beta))
+  ) +
+  
+  coord_sf() +
+  theme_bw() +
+  theme(
+    axis.text.x   = element_text(size = rel(0.9), color = "black"),
+    axis.title.x  = element_text(size = rel(1.0), color = "black"),
+    axis.text.y   = element_text(size = rel(0.9), color = "black"),
+    axis.title.y  = element_text(size = rel(1.0), color = "black"),
+    legend.position = "right",
+    legend.text   = element_text(size = rel(0.9)),
+    legend.title  = element_text(size = rel(1.0)),
+    plot.title    = element_text(face = "bold", size = rel(1.2))
+  ) +
+  labs(
+    x = 'Longitude',
+    y = 'Latitude',
+  ) +
+  
+  # Rosa dos Ventos
+  annotation_north_arrow(
+    location = "tl", 
+    which_north = "true",
+    pad_x = unit(0.2, "in"),
+    pad_y = unit(0.2, "in"),
+    style = north_arrow_fancy_orienteering(
+      fill = c("white", "black"),
+      line_col = "grey20"
+    )
+  ) +
+  
+  # Barra de Escala
+  annotation_scale(
+    location = "bl",
+    width_hint = 0.2
+  )
+```
+
+![](README_files/figure-gfm/unnamed-chunk-24-1.png)<!-- --> \##
+Identificar as Regiões/Cidades
+
+``` r
+# Carregar malha de municípios
+municipios_sp <- geobr::read_municipality(code_muni = "SP", year = 2020, showProgress = FALSE)
+
+# Converter a grade para objeto espacial
+pontos_sf <- dados_beta_anom %>% 
+  st_as_sf(coords = c("lon_grid", "lat_grid"), crs = st_crs(municipios_sp))
+
+# Cruzamento espacial para identificar o município
+maiores_betas_muni <- st_join(pontos_sf, municipios_sp, join = st_within) %>% 
+  st_drop_geometry() %>% 
+  filter(beta_categoria == "Alto (Fonte Crítica)") %>% 
+  group_by(name_muni) %>% 
+  summarise(
+    beta_medio = mean(beta_xco2, na.rm = TRUE),
+    .groups = "drop"
+  ) %>% 
+  arrange(desc(beta_medio))
+
+# Exibir os 10 municípios com maiores taxas de emissão (Beta)
+head(maiores_betas_muni, 10)
+#> # A tibble: 10 × 2
+#>    name_muni           beta_medio
+#>    <chr>                    <dbl>
+#>  1 Jundiaí                  73.1 
+#>  2 São Paulo                58.3 
+#>  3 Gália                    26.0 
+#>  4 Barra Bonita             18.5 
+#>  5 São Manuel               16.8 
+#>  6 Tarabai                  15.6 
+#>  7 Mogi Guaçu               14.5 
+#>  8 Presidente Epitácio      12.5 
+#>  9 Rosana                   10.9 
+#> 10 Birigui                   9.03
+```
+
+``` r
+library(sf)
+library(geobr)
+library(tidyverse)
+library(ggspatial)
+
+# 1. Carregar a malha espacial dos municípios de SP (2020)
+municipios_sp <- geobr::read_municipality(code_muni = "SP", year = 2020, showProgress = FALSE)
+
+# 2. Processar os pontos de dados brutos
+dados_processar <- dados %>% 
+  drop_na(longitude, latitude) %>% 
+  mutate(tempo_decimal = year + (month - 1) / 12)
+
+# 3. Converter os pontos de dados em um objeto espacial (sf)
+dados_sf <- st_as_sf(
+  dados_processar, 
+  coords = c("longitude", "latitude"), 
+  crs = st_crs(municipios_sp)
+)
+
+# 4. Cruzamento espacial: Identificar a qual município pertence cada ponto de medição
+pontos_com_muni <- st_join(dados_sf, municipios_sp, join = st_within)
+
+# 5. Agrupar por município, calcular o Beta e estratificar em 4 categorias
+city_beta <- pontos_com_muni %>% 
+  st_drop_geometry() %>% 
+  group_by(code_muni) %>% 
+  filter(n() > 2) %>% 
+  summarise(
+    beta_xco2 = cov(xco2, tempo_decimal, use = "complete.obs") / var(tempo_decimal, na.rm = TRUE),
+    .groups = "drop"
+  ) %>% 
+  drop_na(beta_xco2)
+
+# 6. Unir os dados calculados de volta à malha espacial dos municípios
+mapa_municipios <- municipios_sp %>% 
+  left_join(city_beta, by = "code_muni") %>% 
+  mutate(
+    beta_categoria = cut(
+      beta_xco2,
+      breaks = quantile(beta_xco2, probs = c(0, 0.25, 0.50, 0.75, 1), na.rm = TRUE),
+      labels = c("Baixo (Sumidouro / Estável)", "Médio-Baixo", "Médio-Alto", "Alto (Fonte Crítica)"),
+      include.lowest = TRUE
+    )
+  )
+
+# 7. Gerar o gráfico com MUNICÍPIOS COLORIDOS (Alto Contraste)
+ggplot(data = mapa_municipios) +
+  # Desenha os polígonos dos municípios (cinza para municípios sem dados)
+  geom_sf(aes(fill = beta_categoria), color = "white", size = 0.1) +
+  
+  # Paleta de cores discretas/estratificadas
+  scale_fill_manual(
+    values = c(
+      "Baixo (Sumidouro / Estável)" = "#0571b0",  # Azul escuro
+      "Médio-Baixo"                 = "#92c5de",  # Azul claro
+      "Médio-Alto"                  = "#f4a582",  # Laranja claro
+      "Alto (Fonte Crítica)"        = "#ca0020"   # Vermelho escuro
+    ),
+    na.value = "#e0e0e0", # Cor cinza claro para municípios sem dados
+    name = expression(bold("Classes de " * beta))
+  ) +
+  
+  coord_sf() +
+  theme_bw() +
+  theme(
+    axis.text.x     = element_text(size = rel(0.9), color = "black"),
+    axis.title.x    = element_text(size = rel(1.0), color = "black"),
+    axis.text.y     = element_text(size = rel(0.9), color = "black"),
+    axis.title.y    = element_text(size = rel(1.0), color = "black"),
+    legend.position = "right",
+    legend.text     = element_text(size = rel(0.9)),
+    legend.title    = element_text(size = rel(1.0)),
+    panel.grid      = element_line(color = "gray90", linetype = "dashed"),
+    plot.title      = element_text(face = "bold", size = rel(1.2))
+  ) +
+  labs(
+    x = 'Longitude',
+    y = 'Latitude',
+  ) +
+  
+  # Rosa dos Ventos
+  annotation_north_arrow(
+    location = "tl", 
+    which_north = "true",
+    pad_x = unit(0.2, "in"),
+    pad_y = unit(0.2, "in"),
+    style = north_arrow_fancy_orienteering(
+      fill = c("white", "black"),
+      line_col = "grey20"
+    )
+  ) +
+  
+  # Barra de Escala
+  annotation_scale(
+    location = "bl",
+    width_hint = 0.2
+  )
+```
+
+![](README_files/figure-gfm/unnamed-chunk-26-1.png)<!-- -->
+
+O coeficiente angular (β) da regressão linear representa a tendência
+temporal da concentração atmosférica de XCO₂ em cada área analisada.
+Valores positivos indicam aumento da concentração de CO₂ ao longo do
+tempo, enquanto valores negativos sugerem redução, podendo estar
+associados, respectivamente, a potenciais fontes e sumidouros de
+carbono. Já a anomalia de XCO₂ representa o desvio entre os valores
+observados e a tendência estimada, permitindo identificar variações
+temporárias relacionadas a fatores ambientais. A análise espacial desses
+parâmetros auxilia na identificação de padrões de emissão e remoção de
+carbono, devendo ser interpretada em conjunto com outras variáveis
+ambientais e considerando a influência do transporte atmosférico.
+Observou-se que áreas com maior intensidade de ação antrópica
+apresentaram, em geral, valores mais elevados de β, indicando uma
+tendência de aumento da concentração atmosférica de XCO₂ ao longo do
+período analisado. Esse padrão sugere que atividades humanas, como a
+expansão urbana, a atividade industrial e as mudanças no uso da terra,
+podem estar associadas ao incremento das concentrações de CO₂ nessas
+regiões.
+>>>>>>> f42e5d3a3d018beb43de899ac9b84ba107dee673
